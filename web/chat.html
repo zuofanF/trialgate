@@ -542,16 +542,18 @@ textarea#input::placeholder{color:var(--faint);}
   });
 
   /* ---------- status + welcome ---------- */
+  var health = null;
   function setStatus(up){
     statusEl.className = "status " + (up ? "ok" : "off");
-    statusT.textContent = up ? "engine connected" : "backend offline";
+    if (up && health && health.llm) statusT.textContent = health.model || "LLM agent";
+    else statusT.textContent = up ? "engine connected" : "backend offline";
   }
   function welcome(){
     var body = addAgentShell();
     body.appendChild(node('<div class="atext">I am the TrialGate demo agent. Upload a clinical-trial CSV and tell me what to do (try <b>get this CSV ready to submit</b>), or pick a quick-start below. I run the real deterministic tools and show you every call and every change.</div>'));
     scrollDown();
   }
-  fetch("/api/health").then(function(r){ return r.json(); }).then(function(){ setStatus(true); }).catch(function(){ setStatus(false); });
+  fetch("/api/health").then(function(r){ return r.json(); }).then(function(d){ health = d; setStatus(true); }).catch(function(){ setStatus(false); });
   welcome();
   input.focus();
 })();
