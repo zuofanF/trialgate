@@ -1,0 +1,4 @@
+[
+  {"drug_name": "Metformin", "dose": "500 mg", "frequency": "BID", "start_date": "2020-01-01", "end_date": null, "status": "active"},
+  {"drug_name": "Insulin glargine", "dose": "20 units", "frequency": "QHS", "start_date": "2024-11-01", "end_date": null, "status": "active"}
+]

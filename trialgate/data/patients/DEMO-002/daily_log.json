@@ -1,0 +1,23 @@
+[
+  {"date": "2026-06-01", "time": "07:00", "glucose_mg_dl": 150},
+  {"date": "2026-06-02", "time": "07:00", "glucose_mg_dl": 162},
+  {"date": "2026-06-03", "time": "07:00", "glucose_mg_dl": 145},
+  {"date": "2026-06-04", "time": "07:00", "glucose_mg_dl": 158},
+  {"date": "2026-06-05", "time": "07:00", "glucose_mg_dl": 149},
+  {"date": "2026-06-06", "time": "07:00", "glucose_mg_dl": 171},
+  {"date": "2026-06-07", "time": "07:00", "glucose_mg_dl": 140},
+  {"date": "2026-06-08", "time": "07:00", "glucose_mg_dl": 155},
+  {"date": "2026-06-09", "time": "07:00", "glucose_mg_dl": 163},
+  {"date": "2026-06-10", "time": "07:00", "glucose_mg_dl": 148},
+  {"date": "2026-06-11", "time": "07:00", "glucose_mg_dl": 152},
+  {"date": "2026-06-12", "time": "07:00", "glucose_mg_dl": 167},
+  {"date": "2026-06-13", "time": "07:00", "glucose_mg_dl": 144},
+  {"date": "2026-06-14", "time": "07:00", "glucose_mg_dl": 159},
+  {"date": "2026-06-15", "time": "07:00", "glucose_mg_dl": 146},
+  {"date": "2026-06-16", "time": "07:00", "glucose_mg_dl": 153},
+  {"date": "2026-06-17", "time": "07:00", "glucose_mg_dl": 168},
+  {"date": "2026-06-18", "time": "07:00", "glucose_mg_dl": 141},
+  {"date": "2026-06-19", "time": "07:00", "glucose_mg_dl": 156},
+  {"date": "2026-06-20", "time": "07:00", "glucose_mg_dl": 149},
+  {"date": "2026-06-21", "time": "07:00", "glucose_mg_dl": 160}
+]
