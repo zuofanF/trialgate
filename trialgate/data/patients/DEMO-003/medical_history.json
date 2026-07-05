@@ -1,0 +1,9 @@
+{
+  "patient_id": "DEMO-003",
+  "age": " 58",
+  "gender": "female",
+  "pregnant": false,
+  "diagnoses": [
+    {"condition": "Type 2 Diabetes Mellitus", "icd10": "E11.9", "onset_date": "03/01/2019"}
+  ]
+}

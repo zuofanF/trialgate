@@ -5,10 +5,20 @@ matching parser in `_PARSERS`. Every parser returns the same shape
 regardless of source format (a dict for medical_history, a list of
 row-dicts for everything else), so clean_profile.py never needs to know
 whether a given record kind came from JSON or CSV.
+
+Two entry points are provided:
+  - `load_records(records_dir)` -- reads files from disk (Claude Code,
+    or any client where the MCP server can reach the filesystem).
+  - `load_records_from_content(files)` -- takes file content already in
+    hand, e.g. a file the user pasted/attached directly in a Claude
+    Desktop conversation, which the MCP subprocess can't read off disk.
+Both funnel through the same text-based parsing primitives so a given
+record kind behaves identically regardless of how it arrived.
 """
 from __future__ import annotations
 
 import csv
+import io
 import json
 from pathlib import Path
 
@@ -21,8 +31,8 @@ class RecordsError(Exception):
         self.message = message
 
 
-def _parse_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
+def _parse_json_text(text: str):
+    return json.loads(text)
 
 
 def _coerce_value(value: str):
@@ -39,16 +49,29 @@ def _coerce_value(value: str):
         return text
 
 
+def _parse_csv_text(text: str):
+    reader = csv.DictReader(io.StringIO(text))
+    return [{k: _coerce_value(v) for k, v in row.items()} for row in reader]
+
+
+def _parse_json(path: Path):
+    return _parse_json_text(path.read_text(encoding="utf-8"))
+
+
 def _parse_csv(path: Path):
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        return [{k: _coerce_value(v) for k, v in row.items()} for row in reader]
+    return _parse_csv_text(path.read_text(encoding="utf-8"))
 
 
-# extension -> parser function.
+# extension -> path-based parser function.
 _PARSERS = {
     ".json": _parse_json,
     ".csv": _parse_csv,
+}
+
+# extension -> text-based parser function.
+_TEXT_PARSERS = {
+    ".json": _parse_json_text,
+    ".csv": _parse_csv_text,
 }
 
 
@@ -73,5 +96,31 @@ def load_records(records_dir: str) -> dict:
             records[kind] = parser(file_path)
         except Exception as exc:  # noqa: BLE001 - surfaced as a RecordsError, never raised raw
             raise RecordsError(f"Failed to parse {file_path.name}: {exc}") from exc
+
+    return records
+
+
+def load_records_from_content(files: dict) -> dict:
+    """Same result shape as load_records, but from file content already in
+    hand instead of a directory on disk.
+
+    Args:
+        files: {"medical_history.json": "<file text>", "labs.csv": "<file text>", ...}
+            -- filename-with-extension keys, exactly matching the name and
+            text of a file the user pasted or attached in the conversation.
+    """
+    records: dict = {}
+    for filename, content in files.items():
+        stem = Path(filename).stem
+        ext = Path(filename).suffix.lower()
+        if stem not in RECORD_KINDS:
+            continue
+        parser = _TEXT_PARSERS.get(ext)
+        if parser is None:
+            raise RecordsError(f"Unsupported file extension for '{filename}': {ext}")
+        try:
+            records[stem] = parser(content)
+        except Exception as exc:  # noqa: BLE001 - surfaced as a RecordsError, never raised raw
+            raise RecordsError(f"Failed to parse {filename}: {exc}") from exc
 
     return records

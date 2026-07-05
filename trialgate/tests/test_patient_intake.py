@@ -1,15 +1,16 @@
 """Phase 2 tests: raw record ingestion, clean profile building, and trial
-eligibility matching for the two demo patients (DEMO-001 eligible,
-DEMO-002 ineligible)."""
+eligibility matching for the demo patients (DEMO-001 eligible, DEMO-002
+ineligible, DEMO-003 eligible-but-messy)."""
 from pathlib import Path
 
 import pytest
 
-from patient_intake import clean_profile, parsers, trials
+from patient_intake import clean_profile, parsers, pipeline, trials
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "patients"
 DEMO_001_DIR = DATA_DIR / "DEMO-001"
 DEMO_002_DIR = DATA_DIR / "DEMO-002"
+DEMO_003_DIR = DATA_DIR / "DEMO-003"
 
 
 def test_load_records_reads_all_five_kinds_for_demo_001():
@@ -115,3 +116,47 @@ def test_demo_002_is_ineligible_for_glycontrol_x_with_exactly_two_failures():
 def test_evaluate_eligibility_unknown_trial_raises():
     with pytest.raises(trials.TrialNotFoundError):
         trials.evaluate_eligibility({"patient_id": "DEMO-001"}, "nonexistent_trial")
+
+
+def test_load_records_from_content_matches_load_records_from_disk():
+    """Content-based ingestion (e.g. a Claude Desktop attachment's text)
+    must produce the exact same records as reading the same files from
+    disk -- this is what lets the tools work without filesystem access."""
+    disk_records = parsers.load_records(str(DEMO_001_DIR))
+    files = {p.name: p.read_text(encoding="utf-8") for p in DEMO_001_DIR.iterdir()}
+    content_records = parsers.load_records_from_content(files)
+
+    assert content_records == disk_records
+
+
+def test_ingest_and_clean_requires_a_source():
+    with pytest.raises(parsers.RecordsError):
+        pipeline.ingest_and_clean()
+
+
+def test_demo_003_messy_data_cleans_to_same_profile_as_demo_001():
+    """DEMO-003 has the identical underlying facts as DEMO-001 (eligible)
+    but with deliberately messy raw formatting: US-format dates, a brand
+    name instead of the generic drug name, 'female' instead of 'F',
+    capitalized urine test values, and stray whitespace. After
+    normalization it must clean up to the exact same profile (aside from
+    patient_id) -- proving messy input doesn't change the verdict."""
+    profile_001, changelog_001 = pipeline.ingest_and_clean(records_dir=str(DEMO_001_DIR))
+    profile_003, changelog_003 = pipeline.ingest_and_clean(records_dir=str(DEMO_003_DIR))
+
+    p1 = {k: v for k, v in profile_001.items() if k != "patient_id"}
+    p3 = {k: v for k, v in profile_003.items() if k != "patient_id"}
+    assert p1 == p3
+
+    # DEMO-001 is already clean (no changes needed); DEMO-003 needs many
+    assert changelog_001 == []
+    assert len(changelog_003) > 10
+
+
+def test_demo_003_is_eligible_for_glycontrol_x_after_cleaning():
+    profile, changelog = pipeline.ingest_and_clean(records_dir=str(DEMO_003_DIR))
+    result = trials.evaluate_eligibility(profile, "glycontrol_x")
+
+    assert result["eligible"] is True
+    assert all(c["passed"] for c in result["criteria"])
+    assert len(changelog) > 0

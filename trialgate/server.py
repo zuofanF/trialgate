@@ -8,13 +8,14 @@ goes to stderr instead.
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from fastmcp import FastMCP
 
 import engine
 import report
 from engine import FileError
-from patient_intake import clean_profile, parsers, trials
+from patient_intake import pipeline, trials
 from patient_intake.parsers import RecordsError
 from patient_intake.trials import TrialNotFoundError
 
@@ -43,7 +44,7 @@ def _file_error_json(exc: FileError) -> str:
 
 
 @mcp.tool()
-def validate_dataset(csv_path: str) -> str:
+def validate_dataset(csv_path: Optional[str] = None, csv_content: Optional[str] = None) -> str:
     """Detect every problem in a clinical trial CSV without changing any data.
 
     When to use:
@@ -52,10 +53,17 @@ def validate_dataset(csv_path: str) -> str:
       clean_dataset so you know what's actually wrong before fixing anything.
 
     Args:
-      csv_path: Absolute path to the CSV file to validate. Columns are
-        expected to be: patient_id, age, gender, visit_date, drug_name,
-        dose, unit, systolic_bp, diastolic_bp, weight_kg, temperature,
-        adverse_event, ae_onset_date, death_date, remarks.
+      csv_path: Absolute path to the CSV file to validate, if it already
+        exists on disk. Columns are expected to be: patient_id, age,
+        gender, visit_date, drug_name, dose, unit, systolic_bp,
+        diastolic_bp, weight_kg, temperature, adverse_event,
+        ae_onset_date, death_date, remarks.
+      csv_content: The full CSV text itself, if the user pasted or
+        attached it directly in the conversation rather than it already
+        being a file on disk. This server can't read files uploaded into
+        the chat -- it only sees your local filesystem -- so if the data
+        arrived as an attachment, read its text and pass it here instead
+        of trying a path. Provide exactly one of csv_path or csv_content.
 
     Returns (JSON string, parseable with json.loads):
       {
@@ -86,14 +94,15 @@ def validate_dataset(csv_path: str) -> str:
       This tool never modifies the file. Use clean_dataset to fix issues.
     """
     try:
-        result = engine.validate(csv_path)
+        result = engine.validate(csv_path, csv_content)
     except FileError as exc:
         return _file_error_json(exc)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def clean_dataset(csv_path: str, output_dir: str) -> str:
+def clean_dataset(csv_path: Optional[str] = None, csv_content: Optional[str] = None,
+                   output_dir: Optional[str] = None) -> str:
     """Fix every auto-fixable problem and write out the cleaned data plus a
     full record of what changed.
 
@@ -107,9 +116,18 @@ def clean_dataset(csv_path: str, output_dir: str) -> str:
       to needs_review.json instead (no silent edits, ever).
 
     Args:
-      csv_path: Absolute path to the CSV file to clean
+      csv_path: Absolute path to the CSV file to clean, if it already
+        exists on disk.
+      csv_content: The full CSV text itself, if the user pasted or
+        attached it directly in the conversation instead of it being a
+        file on disk (this server can't read chat attachments directly,
+        only your local filesystem). Provide exactly one of csv_path or
+        csv_content.
       output_dir: Absolute path to the output directory (created if it
-        doesn't exist)
+        doesn't exist). Optional -- if omitted, a fresh temporary
+        directory is created automatically and its path is returned in
+        the response, so a Desktop demo starting from pasted content
+        doesn't need a pre-existing path at all.
 
     Output files (all inside output_dir):
       1. cleaned.csv       — the data after auto-fixes are applied
@@ -137,14 +155,14 @@ def clean_dataset(csv_path: str, output_dir: str) -> str:
         it returns JSON with issue_type="file_error" instead
     """
     try:
-        result = engine.clean(csv_path, output_dir)
+        result = engine.clean(csv_path, output_dir, csv_content)
     except FileError as exc:
         return _file_error_json(exc)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def quality_report(csv_path: str) -> str:
+def quality_report(csv_path: Optional[str] = None, csv_content: Optional[str] = None) -> str:
     """Generate a plain-language quality summary report (Markdown) for
     non-technical readers.
 
@@ -155,7 +173,10 @@ def quality_report(csv_path: str) -> str:
       validate_dataset JSON.
 
     Args:
-      csv_path: Absolute path to the CSV file
+      csv_path: Absolute path to the CSV file, if it already exists on disk.
+      csv_content: The full CSV text itself, if the user pasted or
+        attached it directly in the conversation. Provide exactly one of
+        csv_path or csv_content.
 
     Returns:
       A Markdown string (safe to paste directly into chat or a document).
@@ -168,15 +189,16 @@ def quality_report(csv_path: str) -> str:
       - Before/after clean_dataset, to explain the change to a non-technical audience
     """
     try:
-        return report.generate_report(csv_path)
+        return report.generate_report(csv_path, csv_content)
     except FileError as exc:
         return f"# Data Quality Report\n\nError: {exc.message}"
 
 
 @mcp.tool()
-def build_patient_profile(records_dir: str) -> str:
+def build_patient_profile(records_dir: Optional[str] = None, records: Optional[dict] = None) -> str:
     """Ingest a patient's raw records (from any mix of supported file
-    formats) and return a single clean, structured patient profile.
+    formats), clean/normalize them, and return a single clean, structured
+    patient profile.
 
     When to use:
       Call this to see a normalized view of one patient's data pulled
@@ -186,12 +208,25 @@ def build_patient_profile(records_dir: str) -> str:
 
     Args:
       records_dir: Absolute path to a directory containing one patient's
-        raw record files. Each file must be named `<kind>.<ext>` where
-        kind is one of: medical_history, prescriptions, labs, urine_test,
-        daily_log. Supported extensions: .json, .csv (classified
-        automatically by extension; medical_history/prescriptions/
-        daily_log are typically JSON, labs/urine_test are typically CSV,
-        but any supported kind can be either format).
+        raw record files, if they already exist on disk. Each file must
+        be named `<kind>.<ext>` where kind is one of: medical_history,
+        prescriptions, labs, urine_test, daily_log. Supported extensions:
+        .json, .csv (classified automatically by extension; any kind can
+        be either format).
+      records: {"medical_history.json": "<file text>", "labs.csv": "<file text>", ...}
+        -- use this instead of records_dir when the user pasted or
+        attached the patient's files directly in the conversation. This
+        server can't read chat attachments by path -- it only sees your
+        local filesystem -- so if the user dropped files into the chat,
+        read each one's content and pass them here keyed by their
+        original filename (with extension). Provide exactly one of
+        records_dir or records.
+
+    Normalization: dates, gender codes, drug name variants, and stray
+    number formatting (whitespace, thousands separators) are cleaned up
+    automatically before the profile is built -- same "no silent edits"
+    principle as clean_dataset. Every change made is listed in the
+    response's "normalization_changelog".
 
     Returns (JSON string):
       {
@@ -200,7 +235,8 @@ def build_patient_profile(records_dir: str) -> str:
         "current_medications": [{"drug_name", "dose", "frequency", "start_date", "status"}, ...],
         "latest_labs": {"hba1c_pct", "hba1c_date", "egfr", "egfr_date", "creatinine_mg_dl", "creatinine_date"},
         "latest_urine_test": {"date", "protein", "glucose", "ketones", "blood"},
-        "glucose_log_summary": {"severe_hypo_events", "avg_glucose_mg_dl", "readings_count"}
+        "glucose_log_summary": {"severe_hypo_events", "avg_glucose_mg_dl", "readings_count"},
+        "normalization_changelog": [{"record_kind", "field", "before", "after", "rule", "message"}, ...]
       }
       Only the most recent result (by date) is kept for labs and urine
       tests, even if the source file has multiple historical rows.
@@ -208,35 +244,47 @@ def build_patient_profile(records_dir: str) -> str:
     When to use:
       - Whenever an agent needs a single normalized snapshot of a patient
         before reasoning about them
-      - If the directory or a required file is missing/corrupt, this never
-        raises -- it returns JSON with issue_type="file_error" instead
+      - If the directory/files are missing/corrupt, this never raises --
+        it returns JSON with issue_type="file_error" instead
     """
     try:
-        records = parsers.load_records(records_dir)
-        profile = clean_profile.build_profile(records)
+        profile, changelog = pipeline.ingest_and_clean(records_dir, records)
     except RecordsError as exc:
         return _error_json("file_error", exc.message)
+    profile["normalization_changelog"] = changelog
     return json.dumps(profile, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def check_trial_eligibility(records_dir: str, trial_id: str) -> str:
+def check_trial_eligibility(records_dir: Optional[str] = None, records: Optional[dict] = None,
+                             trial_id: str = "") -> str:
     """Determine whether a specific patient is eligible for a specific
     clinical trial, from their raw records straight through to a verdict.
 
     When to use:
-      This is the main phase-2 demo tool: call it when a user asks
-      "is this patient eligible for <trial>?" or presses an equivalent
-      "check eligibility" action for one patient. It runs the full
-      pipeline (ingest raw records -> build clean profile -> evaluate
+      This is the main demo tool: call it when a user asks "is this
+      patient eligible for <trial>?" or presses an equivalent "check
+      eligibility" action for one patient. It runs the full pipeline
+      (ingest raw records -> normalize/clean -> build profile -> evaluate
       every eligibility criterion) in one call.
 
     Args:
-      records_dir: Absolute path to the patient's raw records directory
-        (same format as build_patient_profile's records_dir)
+      records_dir: Absolute path to the patient's raw records directory,
+        if the files already exist on disk (same format as
+        build_patient_profile's records_dir).
+      records: {"medical_history.json": "<file text>", ...} -- use this
+        instead of records_dir when the user pasted or attached the
+        patient's files directly in the conversation (this server can't
+        read chat attachments by path, only your local filesystem).
+        Provide exactly one of records_dir or records.
       trial_id: Which trial to check against. Currently available:
         "glycontrol_x" (a Type 2 Diabetes trial for adults inadequately
         controlled on Metformin monotherapy).
+
+    Normalization: the patient's raw records are cleaned (dates, gender
+    codes, drug names, number formatting) before eligibility is
+    evaluated, so messy source data doesn't produce a wrong verdict. The
+    response's "normalization_changelog" lists everything that was fixed.
 
     Returns (JSON string):
       {
@@ -245,7 +293,8 @@ def check_trial_eligibility(records_dir: str, trial_id: str) -> str:
         "criteria": [
           {"id": str, "description": str, "passed": bool, "detail": str}, ...
         ],
-        "summary": str   # one-line plain-language verdict, safe to quote directly
+        "summary": str,   # one-line plain-language verdict, safe to quote directly
+        "normalization_changelog": [{"record_kind", "field", "before", "after", "rule", "message"}, ...]
       }
       Every criterion is always included (not just the failing ones), so
       the full picture -- what passed and what didn't -- is visible at a
@@ -253,18 +302,18 @@ def check_trial_eligibility(records_dir: str, trial_id: str) -> str:
 
     When to use:
       - To answer "does this patient match this trial?" for one named patient
-      - If the trial_id or records_dir/files are invalid, this never
+      - If the trial_id or records_dir/records are invalid, this never
         raises -- it returns JSON with issue_type="file_error" or
         issue_type="trial_not_found" instead
     """
     try:
-        records = parsers.load_records(records_dir)
-        profile = clean_profile.build_profile(records)
+        profile, changelog = pipeline.ingest_and_clean(records_dir, records)
         result = trials.evaluate_eligibility(profile, trial_id)
     except RecordsError as exc:
         return _error_json("file_error", exc.message)
     except TrialNotFoundError as exc:
         return _error_json("trial_not_found", exc.message)
+    result["normalization_changelog"] = changelog
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

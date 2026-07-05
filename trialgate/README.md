@@ -31,7 +31,11 @@ pytest
 
 TrialGate exposes 5 tools: 3 for CSV cleaning, 2 for patient-trial matching.
 
-### 1. `validate_dataset(csv_path: str) -> str`
+Every tool below accepts either a filesystem path **or** the raw content
+itself — see [Using content instead of a path](#using-content-instead-of-a-path-claude-desktop)
+for when to use which.
+
+### 1. `validate_dataset(csv_path=None, csv_content=None) -> str`
 
 Detects every problem in the data **without changing it**, returning a
 structured JSON string.
@@ -56,10 +60,11 @@ structured JSON string.
 }
 ```
 
-### 2. `clean_dataset(csv_path: str, output_dir: str) -> str`
+### 2. `clean_dataset(csv_path=None, csv_content=None, output_dir=None) -> str`
 
 Fixes every auto-fixable problem (information-preserving normalizations
-only) and writes 3 files to `output_dir`:
+only) and writes 3 files to `output_dir` (auto-created in a temp
+directory if `output_dir` is omitted):
 
 1. `cleaned.csv` — the cleaned data
 2. `changelog.json` — a record of every change (row, column, before, after, rule applied)
@@ -68,30 +73,33 @@ only) and writes 3 files to `output_dir`:
 The return value is the absolute path to each file plus a summary
 (`fixed` count, `needs_review` count).
 
-### 3. `quality_report(csv_path: str) -> str`
+### 3. `quality_report(csv_path=None, csv_content=None) -> str`
 
 Returns a plain-language Markdown summary for non-technical readers:
 issue counts by category, severity, and whether each category is
 auto-fixable.
 
-### 4. `build_patient_profile(records_dir: str) -> str`
+### 4. `build_patient_profile(records_dir=None, records=None) -> str`
 
 Ingests one patient's raw records (any mix of `.json`/`.csv` files named
-`medical_history`, `prescriptions`, `labs`, `urine_test`, `daily_log`) and
-returns a single clean, normalized profile: demographics, diagnoses,
-current medications, latest lab values, latest urine test, and a glucose
-log summary. Files are classified and parsed by extension, so labs/urine
-tests can arrive as CSV while everything else is JSON (or any other
-combination) — the output is identical either way.
+`medical_history`, `prescriptions`, `labs`, `urine_test`, `daily_log`),
+**normalizes them** (dates, gender codes, drug name variants, number
+formatting — reusing the same rules as `clean_dataset`), and returns a
+single clean profile: demographics, diagnoses, current medications,
+latest lab values, latest urine test, a glucose log summary, and a
+`normalization_changelog` listing everything that was fixed. Files are
+classified and parsed by extension, so labs/urine tests can arrive as
+CSV while everything else is JSON (or any other combination) — the
+output is identical either way, messy or not.
 
-### 5. `check_trial_eligibility(records_dir: str, trial_id: str) -> str`
+### 5. `check_trial_eligibility(records_dir=None, records=None, trial_id="") -> str`
 
 The main demo tool: runs `build_patient_profile` under the hood, then
 evaluates the resulting profile against a named trial's eligibility
 criteria (currently `"glycontrol_x"`, a mock Type 2 Diabetes trial).
 Returns `eligible: true/false` plus a criterion-by-criterion breakdown
 (`passed` + a plain-language `detail` for every criterion, not just the
-failing ones) and a one-line `summary`.
+failing ones), a one-line `summary`, and the `normalization_changelog`.
 
 ## Cleaning Rules
 
@@ -122,6 +130,27 @@ field.
 2. **No silent edits**: every change is recorded in the changelog.
 3. **When in doubt, don't fix it**: anything that changes the *meaning* of a value goes to needs_review instead.
 
+## Using content instead of a path (Claude Desktop)
+
+An MCP server only sees your local filesystem — it can't read a file the
+user drops directly into a Claude Desktop chat (that goes into a separate
+chat sandbox). If you try to pass a chat-attached file's path to
+`csv_path`/`records_dir`, it will fail with a `file_error` because the
+path doesn't exist on the server's filesystem.
+
+For that case, every tool has a content-based alternative:
+- `validate_dataset` / `clean_dataset` / `quality_report`: pass the CSV's
+  full text as `csv_content` instead of `csv_path`.
+- `build_patient_profile` / `check_trial_eligibility`: pass `records`, a
+  dict of `{"medical_history.json": "<file text>", "labs.csv": "<file text>", ...}`
+  — keyed by the original filename (with extension) — instead of `records_dir`.
+
+So the actual Claude Desktop flow is: the user drops files into the chat,
+Claude reads their content (it can do this natively), and then calls the
+tool with that content as a string/dict argument rather than a path.
+Provide exactly one of the two options for a given tool; both still work
+identically on already-clean or genuinely messy data.
+
 ## Patient-Trial Matching
 
 ### The trial: GlyControl-X
@@ -140,29 +169,43 @@ deterministically against the clean patient profile (see
 7. No severe hypoglycemia event (glucose < 54 mg/dL) in the daily glucose log
 8. Not pregnant
 
-### The two demo patients
+### The three demo patients
 
-`data/patients/DEMO-001/` and `data/patients/DEMO-002/` each contain one
-patient's raw records (`medical_history.json`, `prescriptions.json`,
-`labs.csv`, `urine_test.csv`, `daily_log.json`):
+`data/patients/DEMO-00{1,2,3}/` each contain one patient's raw records
+(`medical_history.json`, `prescriptions.json`, `labs.csv`,
+`urine_test.csv`, `daily_log.json`):
 
-- **DEMO-001** passes all 8 criteria → `eligible: true`
+- **DEMO-001** is already clean and passes all 8 criteria → `eligible: true`,
+  empty `normalization_changelog`
 - **DEMO-002** is on insulin (fails the monotherapy requirement) and has
   a low eGFR of 38 (fails the renal-function requirement) →
   `eligible: false`, with those 2 criteria's `detail` explaining why
+- **DEMO-003** has the *identical* underlying facts as DEMO-001 (same
+  age, diagnosis, labs, medication), but every file is deliberately
+  messy: US-format dates, `"Glucophage "` instead of `Metformin`,
+  `"female"` instead of `F`, capitalized urine test values, stray
+  whitespace in a couple of numbers. After normalization it cleans up to
+  the exact same profile as DEMO-001 and comes back `eligible: true`
+  with a 35-entry `normalization_changelog` — this is the one to drag
+  into Claude Desktop for a live "clean it, then match it" demo.
 
 ### Demo script
 
 ```
 check_trial_eligibility(records_dir=".../data/patients/DEMO-001", trial_id="glycontrol_x")
-  -> eligible: true, all 8 criteria pass
+  -> eligible: true, all 8 criteria pass, empty changelog (nothing to clean)
 
 check_trial_eligibility(records_dir=".../data/patients/DEMO-002", trial_id="glycontrol_x")
   -> eligible: false, fails "metformin_monotherapy" (on insulin) and "egfr_min" (eGFR 38 < 45)
+
+check_trial_eligibility(records_dir=".../data/patients/DEMO-003", trial_id="glycontrol_x")
+  -> eligible: true, but only after a 35-entry normalization_changelog cleaned up
+     US-format dates, a brand name, a spelled-out gender, and stray whitespace
 ```
 
-Running both back-to-back is the clearest way to show the tool actually
-reasons about the data rather than always returning the same answer.
+Running all three back-to-back is the clearest way to show the tool
+actually reasons about the data (contrasting pass/fail) *and* actually
+cleans messy input rather than choking on it or guessing wrong.
 
 ## Registering with Claude Desktop / Claude Code
 
@@ -205,6 +248,17 @@ teammate creates their own after running Setup above.
 2. It reports the `eligible` verdict and quotes the failing criteria's
    `detail` (if any) directly from the response
 
+**Trial matching from Claude Desktop** — when the user drops 5 files
+(a patient's raw records) directly into the chat and asks the same
+question:
+
+1. The agent reads each attached file's content (it can do this
+   natively, regardless of format)
+2. It calls `check_trial_eligibility` with `records={"medical_history.json": "...", ...}`
+   instead of `records_dir`, since there's no path to give it
+3. It reports the verdict, and can also surface `normalization_changelog`
+   to show what was cleaned up along the way
+
 All 5 tools are meant to be composed autonomously by the agent -- each
 docstring in `server.py` spells out its purpose, arguments, return shape,
 and when to call it.
@@ -220,17 +274,20 @@ trialgate/
 ├── engine.py           # CSV-cleaning rule pipeline + changelog generation
 ├── report.py           # plain-language report generation
 ├── patient_intake/
-│   ├── parsers.py      # per-extension raw record loading (.json, .csv)
-│   ├── clean_profile.py # builds a normalized PatientProfile from raw records
-│   └── trials.py        # deterministic eligibility criteria + evaluator
+│   ├── parsers.py           # per-extension raw record loading (.json, .csv), path- or content-based
+│   ├── normalize_records.py # cleans raw record fields (reuses rules/normalize.py)
+│   ├── pipeline.py          # orchestrates ingest -> normalize -> build_profile
+│   ├── clean_profile.py     # builds a normalized PatientProfile from already-clean records
+│   └── trials.py            # deterministic eligibility criteria + evaluator
 ├── tests/
 │   ├── test_engine.py         # CSV-cleaning acceptance tests
 │   └── test_patient_intake.py # patient-profile + trial-matching tests
 ├── data/
 │   ├── clinical_records_dirty.csv  # CSV-cleaning test data (29 known errors)
 │   └── patients/
-│       ├── DEMO-001/   # eligible demo patient's raw records
-│       └── DEMO-002/   # ineligible demo patient's raw records
+│       ├── DEMO-001/   # eligible demo patient's raw records (already clean)
+│       ├── DEMO-002/   # ineligible demo patient's raw records
+│       └── DEMO-003/   # same facts as DEMO-001, deliberately messy raw records
 ├── pyproject.toml
 └── README.md
 ```

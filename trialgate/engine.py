@@ -9,7 +9,9 @@ disappear, leaving only needs_review issues" -- falls out naturally.
 """
 from __future__ import annotations
 
+import io
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -60,14 +62,26 @@ class FileError(Exception):
         self.message = message
 
 
-def load_dataset(csv_path: str) -> pd.DataFrame:
-    path = Path(csv_path)
-    if not path.exists():
-        raise FileError(f"File not found: {csv_path}")
-    try:
-        df = pd.read_csv(path, dtype=str, keep_default_na=False)
-    except Exception as exc:  # noqa: BLE001 - a broken CSV becomes a file_error
-        raise FileError(f"Failed to read CSV: {exc}") from exc
+def load_dataset(csv_path: Optional[str] = None, csv_content: Optional[str] = None) -> pd.DataFrame:
+    """Load the dataset either from a file on disk (`csv_path`) or from
+    CSV text already in hand (`csv_content`) -- e.g. a file the user
+    pasted or attached directly in the conversation, which an MCP
+    subprocess can't otherwise reach on disk."""
+    if csv_content is not None:
+        try:
+            df = pd.read_csv(io.StringIO(csv_content), dtype=str, keep_default_na=False)
+        except Exception as exc:  # noqa: BLE001 - a broken CSV becomes a file_error
+            raise FileError(f"Failed to read CSV content: {exc}") from exc
+    elif csv_path is not None:
+        path = Path(csv_path)
+        if not path.exists():
+            raise FileError(f"File not found: {csv_path}")
+        try:
+            df = pd.read_csv(path, dtype=str, keep_default_na=False)
+        except Exception as exc:  # noqa: BLE001 - a broken CSV becomes a file_error
+            raise FileError(f"Failed to read CSV: {exc}") from exc
+    else:
+        raise FileError("Provide either csv_path or csv_content")
 
     missing_cols = [c for c in COLUMNS if c not in df.columns]
     if missing_cols:
@@ -231,19 +245,20 @@ def summarize(issues: list, total_rows: int) -> dict:
     }
 
 
-def validate(csv_path: str) -> dict:
-    df = load_dataset(csv_path)
+def validate(csv_path: Optional[str] = None, csv_content: Optional[str] = None) -> dict:
+    df = load_dataset(csv_path, csv_content)
     row_results = build_row_results(df)
     issues = collect_issues(row_results)
     return summarize(issues, len(df))
 
 
-def clean(csv_path: str, output_dir: str) -> dict:
-    df = load_dataset(csv_path)
+def clean(csv_path: Optional[str] = None, output_dir: Optional[str] = None,
+          csv_content: Optional[str] = None) -> dict:
+    df = load_dataset(csv_path, csv_content)
     row_results = build_row_results(df)
     issues = collect_issues(row_results)
 
-    out_dir = Path(output_dir)
+    out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="trialgate_"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cleaned_rows = []

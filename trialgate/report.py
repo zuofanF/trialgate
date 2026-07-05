@@ -3,6 +3,7 @@ non-technical readers."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import engine
 
@@ -61,8 +62,8 @@ CATEGORY_ORDER = [
 ]
 
 
-def generate_report(csv_path: str) -> str:
-    result = engine.validate(csv_path)
+def generate_report(csv_path: Optional[str] = None, csv_content: Optional[str] = None) -> str:
+    result = engine.validate(csv_path, csv_content)
 
     total_rows = result["total_rows"]
     clean_rows = result["clean_rows"]
@@ -72,8 +73,9 @@ def generate_report(csv_path: str) -> str:
     lines = []
     lines.append("# Data Quality Report")
     lines.append("")
-    lines.append(f"File: `{Path(csv_path).name}`")
-    lines.append("")
+    if csv_path:
+        lines.append(f"File: `{Path(csv_path).name}`")
+        lines.append("")
 
     if total_rows == 0:
         lines.append("No records were found in this file. Please check its contents.")
